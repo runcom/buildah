@@ -167,6 +167,10 @@ type BuildOptions struct {
 	// ForceRmIntermediateCtrs tells the builder to remove all intermediate containers even if
 	// the build was unsuccessful.
 	ForceRmIntermediateCtrs bool
+	// BlobDirectories are one or more directories in which we'll store blobs of images that
+	// we pull, and use at commit-time to skip recompressing layers.  Images built using blob
+	// directories need to be Push()ed with those directories and those contents available.
+	BlobDirectories []string
 }
 
 // Executor is a buildah-based implementation of the imagebuilder.Executor
@@ -222,7 +226,7 @@ type Executor struct {
 	forceRmIntermediateCtrs        bool
 	containerIDs                   []string          // Stores the IDs of the successful intermediate containers used during layer build
 	imageMap                       map[string]string // Used to map images that we create to handle the AS construct.
-
+	blobDirectories                []string
 }
 
 // withName creates a new child executor that will be used whenever a COPY statement uses --from=NAME.
@@ -563,39 +567,40 @@ func NewExecutor(store storage.Store, options BuildOptions) (*Executor, error) {
 		registry:                       options.Registry,
 		transport:                      options.Transport,
 		ignoreUnrecognizedInstructions: options.IgnoreUnrecognizedInstructions,
-		quiet:                          options.Quiet,
-		runtime:                        options.Runtime,
-		runtimeArgs:                    options.RuntimeArgs,
-		transientMounts:                options.TransientMounts,
-		compression:                    options.Compression,
-		output:                         options.Output,
-		outputFormat:                   options.OutputFormat,
-		additionalTags:                 options.AdditionalTags,
-		signaturePolicyPath:            options.SignaturePolicyPath,
-		systemContext:                  options.SystemContext,
-		volumeCache:                    make(map[string]string),
-		volumeCacheInfo:                make(map[string]os.FileInfo),
-		log:                            options.Log,
-		in:                             options.In,
-		out:                            options.Out,
-		err:                            options.Err,
-		reportWriter:                   options.ReportWriter,
-		isolation:                      options.Isolation,
-		namespaceOptions:               options.NamespaceOptions,
-		configureNetwork:               options.ConfigureNetwork,
-		cniPluginPath:                  options.CNIPluginPath,
-		cniConfigDir:                   options.CNIConfigDir,
-		idmappingOptions:               options.IDMappingOptions,
-		commonBuildOptions:             options.CommonBuildOpts,
-		defaultMountsFilePath:          options.DefaultMountsFilePath,
-		iidfile:                        options.IIDFile,
-		squash:                         options.Squash,
-		labels:                         append([]string{}, options.Labels...),
-		annotations:                    append([]string{}, options.Annotations...),
-		layers:                         options.Layers,
-		noCache:                        options.NoCache,
-		removeIntermediateCtrs:         options.RemoveIntermediateCtrs,
-		forceRmIntermediateCtrs:        options.ForceRmIntermediateCtrs,
+		quiet:                   options.Quiet,
+		runtime:                 options.Runtime,
+		runtimeArgs:             options.RuntimeArgs,
+		transientMounts:         options.TransientMounts,
+		compression:             options.Compression,
+		output:                  options.Output,
+		outputFormat:            options.OutputFormat,
+		additionalTags:          options.AdditionalTags,
+		signaturePolicyPath:     options.SignaturePolicyPath,
+		systemContext:           options.SystemContext,
+		volumeCache:             make(map[string]string),
+		volumeCacheInfo:         make(map[string]os.FileInfo),
+		log:                     options.Log,
+		in:                      options.In,
+		out:                     options.Out,
+		err:                     options.Err,
+		reportWriter:            options.ReportWriter,
+		isolation:               options.Isolation,
+		namespaceOptions:        options.NamespaceOptions,
+		configureNetwork:        options.ConfigureNetwork,
+		cniPluginPath:           options.CNIPluginPath,
+		cniConfigDir:            options.CNIConfigDir,
+		idmappingOptions:        options.IDMappingOptions,
+		commonBuildOptions:      options.CommonBuildOpts,
+		defaultMountsFilePath:   options.DefaultMountsFilePath,
+		iidfile:                 options.IIDFile,
+		squash:                  options.Squash,
+		labels:                  append([]string{}, options.Labels...),
+		annotations:             append([]string{}, options.Annotations...),
+		layers:                  options.Layers,
+		noCache:                 options.NoCache,
+		removeIntermediateCtrs:  options.RemoveIntermediateCtrs,
+		forceRmIntermediateCtrs: options.ForceRmIntermediateCtrs,
+		blobDirectories:         append([]string{}, options.BlobDirectories...),
 	}
 	if exec.err == nil {
 		exec.err = os.Stderr
@@ -645,12 +650,18 @@ func (b *Executor) Prepare(ctx context.Context, stage imagebuilder.Stage, from s
 		b.log("FROM %s", displayFrom)
 	}
 
+	blobDirectory := ""
+	if len(b.blobDirectories) > 0 && b.blobDirectories[0] != "" {
+		blobDirectory = b.blobDirectories[0]
+	}
+
 	builderOptions := buildah.BuilderOptions{
 		Args:                  ib.Args,
 		FromImage:             from,
 		PullPolicy:            b.pullPolicy,
 		Registry:              b.registry,
 		Transport:             b.transport,
+		PullBlobDirectory:     blobDirectory,
 		SignaturePolicyPath:   b.signaturePolicyPath,
 		ReportWriter:          b.reportWriter,
 		SystemContext:         b.systemContext,
@@ -1161,6 +1172,7 @@ func (b *Executor) Commit(ctx context.Context, ib *imagebuilder.Builder, created
 		SystemContext:         b.systemContext,
 		IIDFile:               b.iidfile,
 		Squash:                b.squash,
+		BlobDirectories:       b.blobDirectories,
 		Parent:                b.builder.FromImageID,
 	}
 	imgID, ref, _, err := b.builder.Commit(ctx, imageRef, options)
